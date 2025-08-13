@@ -856,8 +856,15 @@ def portfolio_walkforward_backtest(
                     row = df.loc[d]
                     sc = _score_simple(row)
 
-                    # тренд (над SMA200)
-                    trend_ok = ('SMA200' in row and float(row['Close']) > float(row['SMA200']))
+                    # тренд > Close > SMA50 > SMA200 (fallback: Close > SMA200)
+                    trend_ok = False
+                    try:
+                        trend_ok = float(row['Close']) > float(row['SMA50']) > float(row['SMA200']
+                    except Exception:
+                        try:
+                            trend_ok = float(row['Close']) > float(row['SMA200']
+                        except Exception:
+                            trend_ok = False 
                     # моментум срещу SPY
                     mom_t = float(row['mom126']) if 'mom126' in row else -1.0
                     mom_ok = mom_t > spy_mom
