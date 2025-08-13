@@ -1129,6 +1129,7 @@ def main():
 
         # Walk-forward OOS caption – ПОРТФЕЙЛЕН
       # Walk-forward OOS caption – ПОРТФЕЙЛЕН
+# Walk-forward OOS caption – ПОРТФЕЙЛЕН
 try:
     # Универз за портфейла: SP100 + текущите ти тикери (без дубликати)
     univ = list({*SP100, *[r['ticker'] for r in results]})
@@ -1154,8 +1155,8 @@ try:
 except Exception:
     pass
 
-
-        st.success(f"✅ Analysis complete! Processed {len(results)} stocks.")
+# ⬇️ ВАЖНО: този ред е ИЗВЪН try/except (на същото ниво като try:)
+st.success(f"✅ Analysis complete! Processed {len(results)} stocks.")
 
 if __name__ == "__main__":
     main()
