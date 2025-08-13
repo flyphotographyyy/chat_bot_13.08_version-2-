@@ -779,6 +779,11 @@ def portfolio_walkforward_backtest(
         if df is None or df.empty:
             continue
         df = compute_indicators(df)
+                # --- ново: моментум и волатилност ---
+        ret1 = df['Close'].pct_change()
+        df['vol20'] = ret1.rolling(20).std() * np.sqrt(252)   # годишна волатилност
+        df['mom126'] = df['Close'].pct_change(126)            # ~6 месеца
+
         data[t] = df
     if not data:
         return {"oos_trades": 0, "oos_equity": 1.0, "oos_CAGR": 0.0, "oos_maxDD": 0.0, "oos_turnover": 0.0, "oos_sharpe": 0.0}
@@ -788,6 +793,11 @@ def portfolio_walkforward_backtest(
 
     # --- режим от SPY (за EV филтъра) ---
     spy = build_spy_for_regime(1200)
+        # --- ново: 6м моментум и за SPY ---
+    try:
+        spy['mom126'] = spy['Close'].pct_change(126)
+    except Exception:
+        pass
 
     # Прагова логика (фиксирана за OOS)
     base_buy  = {"conservative": 65, "balanced": 60, "aggressive": 55}[risk_profile]
@@ -824,14 +834,19 @@ def portfolio_walkforward_backtest(
             # --- Ребаланс ---
             if d in rebal_dates:
                 # Кандидати (нов вход): score ≥ buy_thr+5 И EV>0 по режим
+                # Кандидати (нов вход): score ≥ buy_thr+5, EV>0, тренд и моментум срещу SPY
                 ranked: List[Tuple[str, int]] = []
+
+                # режим + mom на SPY за тази дата
                 reg = 'unknown'
+                spy_mom = 0.0
                 try:
                     idx = d
                     if not spy.empty:
                         if idx not in spy.index:
                             idx = spy.index[spy.index.get_loc(idx, method='pad')]
                         reg = 'bull' if float(spy.loc[idx, 'SMA50']) > float(spy.loc[idx, 'SMA200']) else 'bear'
+                        spy_mom = float(spy.loc[idx, 'mom126']) if 'mom126' in spy.columns else 0.0
                 except Exception:
                     reg = 'unknown'
 
@@ -840,17 +855,28 @@ def portfolio_walkforward_backtest(
                         continue
                     row = df.loc[d]
                     sc = _score_simple(row)
-                    if sc < (buy_thr + 5):
-                        continue
+
+                    # тренд (над SMA200)
+                    trend_ok = ('SMA200' in row and float(row['Close']) > float(row['SMA200']))
+                    # моментум срещу SPY
+                    mom_t = float(row['mom126']) if 'mom126' in row else -1.0
+                    mom_ok = mom_t > spy_mom
+                    # волатилност под таван (рязко шумни активи ги режем)
+                    vol_t = float(row['vol20']) if 'vol20' in row else 0.5
+                    vol_ok = vol_t <= 0.60  # 60% годишна като горна граница
+
                     ev_ok = False
                     if reg != 'unknown':
                         ev_info = lookup_ev(reg, sc)
                         if ev_info is not None and ev_info[0] > 0:
                             ev_ok = True
-                    if ev_ok:
+
+                    if sc >= (buy_thr + 5) and ev_ok and trend_ok and mom_ok and vol_ok:
                         ranked.append((t, sc))
+
                 ranked.sort(key=lambda x: x[1], reverse=True)
                 rank_pos = {t: i for i, (t, _) in enumerate(ranked)}  # 0 е най-добър
+
 
                 # Кои от текущите да задържим (hysteresis + sell правило)
                 keep: List[str] = []
@@ -884,8 +910,23 @@ def portfolio_walkforward_backtest(
                     if t not in selected:
                         selected.append(t)
 
-                # Пресмятане turnover и разходи
-                desired = {t: (1.0 / len(selected)) for t in selected} if selected else {}
+                # Пресмятане turnover и разходи 
+                # Тегла : инверзна волатилност с клемове(15% ..60%) 
+                if selected:
+                    vols = []
+                    for t in selected:
+                        try:
+                            v = float(data[t].loc[d, "vol20"])
+                        except Exeption:
+                            v = 0.35 # дефолт ако липсва
+                        v = min(max(v, 0.15), 0.60)  # clamp
+                        vols.append(v)
+                    inv = np.array([1.0 / v for v in vols], dtype=float)
+                    w = inv / inv.sum()
+                    desired = {t: float(wi) for t, wi in zip(selected, w)}
+                else:
+                    desired = {}
+                
                 t_over = 0.0
                 changed = 0
                 for t in set(list(held.keys()) + list(desired.keys())):
