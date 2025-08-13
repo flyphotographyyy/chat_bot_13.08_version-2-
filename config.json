@@ -12,7 +12,7 @@
     "rebuild_days": 7
   },
 
-    "wf": { "train_months": 18, "test_months": 6, "top_k": 4, "rebalance": "M", "cost_bps": 5, "slip_bps": 5, "min_hold_days": 7 },
+    "wf": { "train_months": 18, "test_months": 6, "top_k": 3, "rebalance": "M", "cost_bps": 5, "slip_bps": 5, "min_hold_days": 15 },
 
   "regime": { "vix_elevated": 20.0, "vix_high": 25.0 },
 
