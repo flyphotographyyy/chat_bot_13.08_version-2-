@@ -758,14 +758,15 @@ def portfolio_walkforward_backtest(
     rebalance: str = "M",          # 'M' (месечно) или 'W-MON' (седмично)
     cost_bps: int = 5,
     slip_bps: int = 5,
-    min_hold_days: int = 5,        # минимум дни за държане преди да позволим продажба
+    min_hold_days: int = 7,        # минимум дни за държане
 ) -> Dict:
     """
-    Rolling walk-forward портфейлен OOS бектест върху даден универз.
-    - Equal-weight top-K BUY по _score_simple
-    - Ребаланс по честота (M / W-MON)
-    - Реалистични метрики: дневни ритърни, CAGR, maxDD, Sharpe, turnover
-    - Транзакционни разходи се начисляват при ребаланс на база дневен turnover
+    Rolling walk-forward портфейлен OOS бектест.
+    PATCH:
+      - Hysteresis: пази текущите позиции ако ранк ≤ top_k+2 и не са SELL
+      - SELL правило: score < buy_thr-7 или EV<=0
+      - EV>0 и score ≥ buy_thr+5 за НОВИ включвания
+      - Turnover връща ГОДИШНА стойност
     """
     if not tickers:
         return {"oos_trades": 0, "oos_equity": 1.0, "oos_CAGR": 0.0, "oos_maxDD": 0.0, "oos_turnover": 0.0, "oos_sharpe": 0.0}
@@ -779,35 +780,35 @@ def portfolio_walkforward_backtest(
             continue
         df = compute_indicators(df)
         data[t] = df
-
     if not data:
         return {"oos_trades": 0, "oos_equity": 1.0, "oos_CAGR": 0.0, "oos_maxDD": 0.0, "oos_turnover": 0.0, "oos_sharpe": 0.0}
 
-    # Общ индекс от всички тикери
     all_idx = sorted(set().union(*[df.index for df in data.values()]))
     all_idx = pd.DatetimeIndex(all_idx)
-        # --- PATCH: regime по дати за EV-филтър ---
-    spy = build_spy_for_regime(1200)  # SPY с SMA50/200 за режим
 
-    # Прагова логика (фиксирани прагове за OOS; няма VIX тук)
+    # --- режим от SPY (за EV филтъра) ---
+    spy = build_spy_for_regime(1200)
+
+    # Прагова логика (фиксирана за OOS)
     base_buy  = {"conservative": 65, "balanced": 60, "aggressive": 55}[risk_profile]
-    buy_thr   = base_buy + 2  # неутрална зона
+    buy_thr   = base_buy + 2
+    sell_thr  = buy_thr - 7  # по-лесен sell от buy (hysteresis)
+    slack     = 2            # позволяваме да държим до top_k+2 по ранг
 
     # 2) Rolling сегменти
-    step = int(test_m * 22)      # ~ брой търг. дни
-    start_i = int(train_m * 22)  # първи тестов ден
+    step = int(test_m * 22)
+    start_i = int(train_m * 22)
     if len(all_idx) <= start_i + 5:
         return {"oos_trades": 0, "oos_equity": 1.0, "oos_CAGR": 0.0, "oos_maxDD": 0.0, "oos_turnover": 0.0, "oos_sharpe": 0.0}
 
     equity = 1.0
     daily_rets: List[float] = []
-    turnover_sum = 0.0
+    turnover_sum = 0.0  # кумулативен, ще го годишним по-долу
     trades = 0
     cost_rate = (cost_bps + slip_bps) / 1e4
 
-    # Държани позиции: тегло и "възраст" в дни
-    held: Dict[str, float] = {}
-    age: Dict[str, int] = {}
+    held: Dict[str, float] = {}   # тегла
+    age: Dict[str, int] = {}      # дни в позиция
     last_px: Dict[str, float] = {}
 
     for seg_start in range(start_i, len(all_idx) - 1, step):
@@ -816,60 +817,75 @@ def portfolio_walkforward_backtest(
         if len(test_idx) < 5:
             break
 
-        # Дати за ребаланс вътре в сегмента
         rebal_dates = pd.date_range(test_idx[0], test_idx[-1], freq=rebalance)
         rebal_dates = set(pd.DatetimeIndex(rebal_dates))
 
         for d in test_idx:
-            # 2.1) Ребаланс: подбери top-K, спазвайки min_hold_days
+            # --- Ребаланс ---
             if d in rebal_dates:
-                # Кандидати за нови позиции
-                                # --- PATCH: по-строг селектор => score ≥ buy_thr+5 и EV(10d) > 0 по режим ---
-                cands: List[Tuple[str, int, float]] = []
+                # Кандидати (нов вход): score ≥ buy_thr+5 И EV>0 по режим
+                ranked: List[Tuple[str, int]] = []
+                reg = 'unknown'
+                try:
+                    idx = d
+                    if not spy.empty:
+                        if idx not in spy.index:
+                            idx = spy.index[spy.index.get_loc(idx, method='pad')]
+                        reg = 'bull' if float(spy.loc[idx, 'SMA50']) > float(spy.loc[idx, 'SMA200']) else 'bear'
+                except Exception:
+                    reg = 'unknown'
+
                 for t, df in data.items():
                     if d not in df.index:
                         continue
                     row = df.loc[d]
                     sc = _score_simple(row)
-
-                    # режим за тази дата от SPY (bull/bear)
-                    reg = 'unknown'
-                    try:
-                        idx = d
-                        if not spy.empty:
-                            if idx not in spy.index:
-                                idx = spy.index[spy.index.get_loc(idx, method='pad')]
-                            reg = 'bull' if float(spy.loc[idx, 'SMA50']) > float(spy.loc[idx, 'SMA200']) else 'bear'
-                    except Exception:
-                        reg = 'unknown'
-
+                    if sc < (buy_thr + 5):
+                        continue
                     ev_ok = False
                     if reg != 'unknown':
-                        ev_info = lookup_ev(reg, sc)  # средна очаквана доходност по режим+бин
+                        ev_info = lookup_ev(reg, sc)
                         if ev_info is not None and ev_info[0] > 0:
                             ev_ok = True
+                    if ev_ok:
+                        ranked.append((t, sc))
+                ranked.sort(key=lambda x: x[1], reverse=True)
+                rank_pos = {t: i for i, (t, _) in enumerate(ranked)}  # 0 е най-добър
 
-                    # вход само ако score е осезаемо над прага И очакването е положително
-                    if sc >= (buy_thr + 5) and ev_ok:
-                        cands.append((t, sc, float(row["Close"])))
+                # Кои от текущите да задържим (hysteresis + sell правило)
+                keep: List[str] = []
+                for t in list(held.keys()):
+                    # ако не е навършил min_hold_days → задържаме
+                    if age.get(t, 0) < min_hold_days:
+                        keep.append(t)
+                        continue
+                    # ако няма данни за днес — по-добре задържай
+                    if t not in data or d not in data[t].index:
+                        keep.append(t)
+                        continue
+                    row = data[t].loc[d]
+                    sc_now = _score_simple(row)
+                    # EV по режим за текущата позиция
+                    ev_ok = False
+                    if reg != 'unknown':
+                        ev_info = lookup_ev(reg, sc_now)
+                        if ev_info is not None and ev_info[0] > 0:
+                            ev_ok = True
+                    rnk = rank_pos.get(t, 9999)
+                    # Държим ако НЕ е SELL и не е изпаднал далеч от топа
+                    if (sc_now >= sell_thr) and ev_ok and (rnk <= top_k + slack):
+                        keep.append(t)
 
-                cands.sort(key=lambda x: x[1], reverse=True)
-                # --- END PATCH ---
+                # Добавяме нови от ranked до top_k
+                selected = list(dict.fromkeys(keep))  # unique & order
+                for t, _ in ranked:
+                    if len(selected) >= top_k:
+                        break
+                    if t not in selected:
+                        selected.append(t)
 
-
-                # Заключени позиции (още не са навършили минимални дни)
-                locked = [t for t, a in age.items() if t in held and a < min_hold_days]
-                # Останал капацитет
-                slots = max(0, top_k - len(locked))
-
-                selected = locked + [t for t, _, _ in cands if t not in locked][:slots]
-                if selected:
-                    new_w = 1.0 / len(selected)
-                    desired = {t: new_w for t in selected}
-                else:
-                    desired = {}
-
-                # Дневен turnover и разход
+                # Пресмятане turnover и разходи
+                desired = {t: (1.0 / len(selected)) for t in selected} if selected else {}
                 t_over = 0.0
                 changed = 0
                 for t in set(list(held.keys()) + list(desired.keys())):
@@ -878,7 +894,6 @@ def portfolio_walkforward_backtest(
                     if abs(w_new - w_old) > 1e-9:
                         t_over += abs(w_new - w_old)
                         changed += 1
-
                 if t_over > 0:
                     equity *= max(0.0, 1.0 - t_over * cost_rate)
                     turnover_sum += t_over
@@ -887,10 +902,9 @@ def portfolio_walkforward_backtest(
                 # Обнови портфейла
                 new_age: Dict[str, int] = {}
                 for t in desired:
-                    new_age[t] = age.get(t, -1) + 1  # -1 => 0 след +1
-                    if t not in held:
-                        if d in data[t].index:
-                            last_px[t] = float(data[t].loc[d, "Close"])
+                    new_age[t] = age.get(t, -1) + 1
+                    if t not in held and t in data and d in data[t].index:
+                        last_px[t] = float(data[t].loc[d, "Close"])
                 for t in list(last_px.keys()):
                     if t not in desired:
                         last_px.pop(t, None)
@@ -898,7 +912,7 @@ def portfolio_walkforward_backtest(
                 held = desired
                 age = new_age
 
-            # 2.2) Дневна доходност по текущите тегла
+            # --- Дневна доходност ---
             day_ret = 0.0
             for t, w in held.items():
                 df = data.get(t)
@@ -907,42 +921,43 @@ def portfolio_walkforward_backtest(
                 px = float(df.loc[d, "Close"])
                 if t not in last_px:
                     last_px[t] = px
-                    continue  # без принос първия ден
+                    continue
                 if last_px[t] > 0:
                     r = (px - last_px[t]) / last_px[t]
                     day_ret += w * r
                 last_px[t] = px
 
-            # на всяка дата увеличаваме възрастта
+            # възраст
             for t in list(age.keys()):
                 age[t] = age.get(t, 0) + 1
 
             equity *= (1.0 + day_ret)
             daily_rets.append(day_ret)
 
-    # 3) Метрики върху дневните ритърни
+    # 3) Метрики
     rets = np.array(daily_rets, dtype=float)
     if len(rets) == 0:
-        return {"oos_trades": trades, "oos_equity": equity, "oos_CAGR": 0.0, "oos_maxDD": 0.0, "oos_turnover": turnover_sum, "oos_sharpe": 0.0}
+        return {"oos_trades": trades, "oos_equity": equity, "oos_CAGR": 0.0, "oos_maxDD": 0.0, "oos_turnover": 0.0, "oos_sharpe": 0.0}
 
     equity_curve = (1.0 + rets).cumprod()
-    # CAGR по дължина на тестовите дни
     years = max(1e-9, len(rets) / 252.0)
     cagr = equity_curve[-1] ** (1.0 / years) - 1.0
-    # Max drawdown
     roll_max = np.maximum.accumulate(equity_curve)
     maxdd = float(np.max((roll_max - equity_curve) / np.maximum(roll_max, 1e-9)))
-    # Sharpe (без rf; на годишна база)
     sharpe = float((rets.mean() / (rets.std() + 1e-12)) * np.sqrt(252.0)) if len(rets) > 1 else 0.0
+
+    # ГОДИШЕН turnover (не кумулативен)
+    ann_turnover = float(turnover_sum / years)
 
     return {
         "oos_trades": trades,
         "oos_equity": float(equity_curve[-1]),
         "oos_CAGR": float(cagr),
         "oos_maxDD": float(maxdd),
-        "oos_turnover": float(turnover_sum),
+        "oos_turnover": float(ann_turnover),
         "oos_sharpe": float(sharpe),
     }
+
 # <<<<<<<<<<<<<<<<<<<<<<  КРАЙ НА ЗАМЯНАТА  >>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 # -------------------- Scan & Risk Manager --------------------
