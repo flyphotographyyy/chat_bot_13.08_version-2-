@@ -786,6 +786,8 @@ def portfolio_walkforward_backtest(
     # Общ индекс от всички тикери
     all_idx = sorted(set().union(*[df.index for df in data.values()]))
     all_idx = pd.DatetimeIndex(all_idx)
+        # --- PATCH: regime по дати за EV-филтър ---
+    spy = build_spy_for_regime(1200)  # SPY с SMA50/200 за режим
 
     # Прагова логика (фиксирани прагове за OOS; няма VIX тук)
     base_buy  = {"conservative": 65, "balanced": 60, "aggressive": 55}[risk_profile]
@@ -822,15 +824,38 @@ def portfolio_walkforward_backtest(
             # 2.1) Ребаланс: подбери top-K, спазвайки min_hold_days
             if d in rebal_dates:
                 # Кандидати за нови позиции
+                                # --- PATCH: по-строг селектор => score ≥ buy_thr+5 и EV(10d) > 0 по режим ---
                 cands: List[Tuple[str, int, float]] = []
                 for t, df in data.items():
                     if d not in df.index:
                         continue
                     row = df.loc[d]
                     sc = _score_simple(row)
-                    if sc >= buy_thr:
+
+                    # режим за тази дата от SPY (bull/bear)
+                    reg = 'unknown'
+                    try:
+                        idx = d
+                        if not spy.empty:
+                            if idx not in spy.index:
+                                idx = spy.index[spy.index.get_loc(idx, method='pad')]
+                            reg = 'bull' if float(spy.loc[idx, 'SMA50']) > float(spy.loc[idx, 'SMA200']) else 'bear'
+                    except Exception:
+                        reg = 'unknown'
+
+                    ev_ok = False
+                    if reg != 'unknown':
+                        ev_info = lookup_ev(reg, sc)  # средна очаквана доходност по режим+бин
+                        if ev_info is not None and ev_info[0] > 0:
+                            ev_ok = True
+
+                    # вход само ако score е осезаемо над прага И очакването е положително
+                    if sc >= (buy_thr + 5) and ev_ok:
                         cands.append((t, sc, float(row["Close"])))
+
                 cands.sort(key=lambda x: x[1], reverse=True)
+                # --- END PATCH ---
+
 
                 # Заключени позиции (още не са навършили минимални дни)
                 locked = [t for t, a in age.items() if t in held and a < min_hold_days]
