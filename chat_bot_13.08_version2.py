@@ -480,6 +480,10 @@ def precalc_ev_if_needed(extra_universe: Optional[List[str]] = None) -> None:
                 if isinstance(t,str) and t.upper() not in universe:
                     universe.append(t.upper())
         spy = build_spy_for_regime(1200)
+        # --- VIX история за overlay ---
+        vix = fetch_price_history("^VIX", hist_days, "1d")
+        vix_elevated = 20.0
+        vix_high = 25.0
         calib: Dict[str, Dict[str,float]] = {}
         for t in universe:
             df = fetch_price_history(t, 1200, '1d')
@@ -950,7 +954,25 @@ def portfolio_walkforward_backtest(
                     desired = {t: float(wi) for t, wi in zip(selected, w)}
                 else:
                     desired = {}
-                
+                # --- VIX overlay: намаляваме експозицията при висок VIX (остатъкът е кеш) ---
+                scale = 1.0
+                try:
+                    idx = d
+                    if (vix is not None) and (not vix.empty):
+                        if idx not in vix.index:
+                            idx = vix.index[vix.index.get_loc(idx, method='pad')]
+                        v = float(vix.loc[idx, "Close"])
+                        if v >= vix_high:
+                            scale = 0.4   # силен риск-офф
+                        elif v >= vix_elevated:
+                            scale = 0.7   # умерен риск-офф
+                except Exception:
+                    scale = 1.0
+
+                if scale < 1.0 and desired:
+                    desired = {t: w * scale for t, w in desired.items()}
+                  # --- край VIX overlay ---
+
                 t_over = 0.0
                 changed = 0
                 for t in set(list(held.keys()) + list(desired.keys())):
