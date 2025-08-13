@@ -861,14 +861,17 @@ def portfolio_walkforward_backtest(
                     sc = _score_simple(row)
 
                     # тренд > Close > SMA50 > SMA200 (fallback: Close > SMA200)
+                    # тренд: Close > SMA50 > SMA200  (fallback: Close > SMA200) — без try/except
+                    close  = float(row.get('Close',  float('nan')))
+                    sma50  = float(row['SMA50'])  if 'SMA50'  in row else float('nan')
+                    sma200 = float(row['SMA200']) if 'SMA200' in row else float('nan')
+
                     trend_ok = False
-                    try:
-                        trend_ok = float(row['Close']) > float(row['SMA50']) > float(row['SMA200']
-                    except Exception:
-                        try:
-                            trend_ok = float(row['Close']) > float(row['SMA200']
-                        except Exception:
-                            trend_ok = False 
+                    if np.isfinite(sma50) and np.isfinite(sma200):
+                        trend_ok = (close > sma50) and (sma50 > sma200)
+                    elif np.isfinite(sma200):
+                        trend_ok = (close > sma200)
+
                     # моментум срещу SPY
                     mom_t = float(row['mom126']) if 'mom126' in row else -1.0
                     mom_ok = mom_t > spy_mom
