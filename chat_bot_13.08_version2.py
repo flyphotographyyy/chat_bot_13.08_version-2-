@@ -1137,7 +1137,8 @@ def main():
                 CFG['wf']['top_k'],
                 CFG['wf']['rebalance'],
                 CFG['wf']['cost_bps'],
-                CFG['wf']['slip_bps']
+                CFG['wf']['slip_bps'],
+                min_hold_days=CFG['wf'].get('min_hold_days', 5)
             )
             if res_pf.get('oos_trades',0) >= 0:
                 st.caption(
