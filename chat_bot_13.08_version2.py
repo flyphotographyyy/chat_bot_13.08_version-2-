@@ -903,12 +903,29 @@ def portfolio_walkforward_backtest(
                     if reg != 'unknown':
                         ev_info = lookup_ev(reg, sc_now)
                         if ev_info is not None and ev_info[0] > 0:
-                            ev_ok = True
+                            ev_ok =True 
+                            
                     rnk = rank_pos.get(t, 9999)
-                    # Държим ако НЕ е SELL и не е изпаднал далеч от топа
-                    if (sc_now >= sell_thr) and ev_ok and (rnk <= top_k + slack):
-                        keep.append(t)
+                    # --- Nожо > тренд/моменти условия за задържане
+                    trend_keep_ok = True
+                    try:
+                        trend_keep_ok = float(row['Close']) >= float(row['SMA200'])
+                    except Exception:
+                        trend_keep_ok = True
 
+                # Моментум > 6м да не е отрицателен
+            
+                 mom_keep_ok = True
+                try:
+                    mom_keep_ok =float(data[t].loc[d, 'mom126']) >= 0.0
+                except Exception:
+                    mom_keep_ok = True 
+                # --- Край НОВО---
+
+                # Държим ако НЕ е SELL и не е изпаднал далеч от топа И тренд/мом са ОК
+                if (sc_now >= sell_thr) and ev_ok and (rnk <= top_k + slack) and trend_keep_ok and mom_keep_ok:
+                    keep.append(t)
+                
                 # Добавяме нови от ranked до top_k
                 selected = list(dict.fromkeys(keep))  # unique & order
                 for t, _ in ranked:
