@@ -922,7 +922,7 @@ def portfolio_walkforward_backtest(
 
                 # Моментум > 6м да не е отрицателен
             
-                 mom_keep_ok = True
+                mom_keep_ok = True
                 try:
                     mom_keep_ok =float(data[t].loc[d, 'mom126']) >= 0.0
                 except Exception:
