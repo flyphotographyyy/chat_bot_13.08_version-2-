@@ -1286,7 +1286,7 @@ def main():
             pass
 
         # ТОВА ОСТАВА ВЪТРЕ В if-блока, за да вижда results
-        st.success(f"✅ Analysis complete! Processed {len(results)} stocks.")
+        
         
 
     
