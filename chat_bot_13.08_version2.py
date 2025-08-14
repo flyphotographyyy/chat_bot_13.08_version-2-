@@ -1260,30 +1260,35 @@ def main():
         # Walk-forward OOS caption – ПОРТФЕЙЛЕН
         
 
-        try:
-            # Универз за портфейла: SP100 + текущите ти тикери (без дубликати)
-            univ = list({*SP100, *[r['ticker'] for r in results]})
+        # Walk-forward OOS caption – ПОРТФЕЙЛЕН
+try:
+    # Универз за портфейла: SP100 + текущите ти тикери (без дубликати)
+    univ = list({*SP100, *[r['ticker'] for r in results]})
 
-            res_pf = portfolio_walkforward_backtest(
-                univ,
-                risk_profile,
-                CFG['wf']['train_months'],
-                CFG['wf']['test_months'],
-                CFG['wf']['top_k'],
-                CFG['wf']['rebalance'],
-                CFG['wf']['cost_bps'],
-                CFG['wf']['slip_bps'],
-                min_hold_days=CFG['wf'].get('min_hold_days', 7)
-            )
-            if res_pf.get('oos_trades', 0) >= 0:
-                st.caption(
-                    f"📦 Portfolio OOS: CAGR={res_pf.get('oos_CAGR', 0):.2%} · "
-                    f"maxDD={res_pf.get('oos_maxDD', 0):.2%} · "
-                    f"Sharpe~{res_pf.get('oos_sharpe', 0):.2f} · "
-                    f"turnover={res_pf.get('oos_turnover', 0):.2f}"
-                )
-        except Exception:
-            pass
+    res_pf = portfolio_walkforward_backtest(
+        univ,
+        risk_profile,
+        CFG['wf']['train_months'],
+        CFG['wf']['test_months'],
+        CFG['wf']['top_k'],
+        CFG['wf']['rebalance'],
+        CFG['wf']['cost_bps'],
+        CFG['wf']['slip_bps'],
+        min_hold_days=CFG['wf'].get('min_hold_days', 7)
+    )
+
+    if res_pf.get('oos_trades', 0) >= 0:
+        st.caption(
+            f"📦 Portfolio OOS: "
+            f"CAGR={res_pf.get('oos_CAGR', 0.0):.2%} · "
+            f"maxDD={res_pf.get('oos_maxDD', 0.0):.2%} · "
+            f"Sharpe~{res_pf.get('oos_sharpe', 0.0):.2f} · "
+            f"turnover={res_pf.get('oos_turnover', 0.0):.2f}"
+        )
+except Exception:
+    # не показваме грешката в UI, за да не пречи на основния поток
+    pass
+
 
         # ТОВА ОСТАВА ВЪТРЕ В if-блока, за да вижда results
         
