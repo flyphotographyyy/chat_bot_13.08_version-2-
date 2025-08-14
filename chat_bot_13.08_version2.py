@@ -1258,9 +1258,8 @@ def main():
                         pass
 
         # Walk-forward OOS caption – ПОРТФЕЙЛЕН
-      # Walk-forward OOS caption – ПОРТФЕЙЛЕН
-# Walk-forward OOS caption – ПОРТФЕЙ
-                # Walk-forward OOS caption – ПОРТФЕЙЛЕН
+        
+
         try:
             # Универз за портфейла: SP100 + текущите ти тикери (без дубликати)
             univ = list({*SP100, *[r['ticker'] for r in results]})
